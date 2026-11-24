@@ -1,0 +1,44 @@
+[project]
+name = "llm-ab"
+version = "0.1.0"
+description = "Statistics for comparing LLM prompts and models on the same eval items"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.27",
+    "matplotlib>=3.9",
+    "numpy>=2.0",
+    "python-dotenv>=1.0",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/llm_ab"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+extend-exclude = ["classic"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Lithuanian sentences use an en dash.
+"src/llm_ab/items.py" = ["RUF001"]
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
