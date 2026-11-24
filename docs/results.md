@@ -52,3 +52,15 @@ the token limit. Items where either arm's reply was truncated are left out.
 |---|---|---:|---:|---:|---:|---|
 | `baseline` | `baseline-repeat` | 197 | 3 | 2 | -0.5 pp | -2.5 pp to +1.5 pp |
 | `baseline` | `decompose` | 181 | 47 | 13 | -18.8 pp | -26.5 pp to -11.0 pp |
+
+## Kinds of wrong answer
+
+A description made after reading the replies, not a test. A reply cut off at the
+token limit is counted as that, whatever else is wrong with it.
+
+| Kind | `baseline` | `baseline-repeat` | `decompose` |
+|---|---:|---:|---:|
+| misread the number | 40 | 40 | 45 |
+| added group counts, not place values | 0 | 0 | 23 |
+| cut off at the token limit | 1 | 2 | 18 |
+| all wrong | 41 | 42 | 86 |

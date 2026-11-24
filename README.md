@@ -46,6 +46,11 @@ often the variants disagree, not only on the gap between them:
 
 A 200-item eval can confirm a ten-point improvement. It cannot confirm a five-point one.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/sample-size-dark.png">
+  <img src="docs/figures/sample-size-light.png" alt="Items needed against the accuracy gap to detect, for arms that disagree on 15%, 25% and 35% of items; 200 items suffice only for gaps of about 8 to 12 points" width="720">
+</picture>
+
 All of this lives in [`stats.py`](src/llm_ab/stats.py), about 150 lines with no
 dependency beyond NumPy. Each function is tested against a hand calculation or a
 published value, and the sample-size formula is checked by simulation.
@@ -114,38 +119,83 @@ so that a format problem is not mistaken for a reading problem.
 2026. The full tables are in [`docs/results.md`](docs/results.md) and every reply is in
 [`runs/`](runs/).
 
-![Accuracy difference against the baseline, with 95% bootstrap intervals](docs/results.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/accuracy-dark.png">
+  <img src="docs/figures/accuracy-light.png" alt="Accuracy per arm with 95% Wilson intervals: baseline 79.5%, baseline-repeat 79.0%, decompose 57.0%" width="720">
+</picture>
 
-| Arm | Correct | Accuracy | 95% CI (Wilson) | Wrong number | Bad format |
-|---|---:|---:|---|---:|---:|
-| `baseline` | 159 | 79.5% | 73.4% to 84.5% | 40 | 1 |
-| `baseline-repeat` | 158 | 79.0% | 72.8% to 84.1% | 40 | 2 |
-| `decompose` | 114 | 57.0% | 50.1% to 63.7% | 69 | 17 |
+| Arm | Correct | Accuracy | 95% CI (Wilson) |
+|---|---:|---:|---|
+| `baseline` | 159 | 79.5% | 73.4% to 84.5% |
+| `baseline-repeat` | 158 | 79.0% | 72.8% to 84.1% |
+| `decompose` | 114 | 57.0% | 50.1% to 63.7% |
+
+### The "better" prompt is worse
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/differences-dark.png">
+  <img src="docs/figures/differences-light.png" alt="Accuracy difference against the baseline: baseline-repeat -0.5 points, decompose -22.5 points, with 95% bootstrap intervals" width="720">
+</picture>
 
 | A | B | Only A right | Only B right | Difference | 95% CI (bootstrap) | p (Holm) |
 |---|---|---:|---:|---:|---|---:|
 | `baseline` | `baseline-repeat` | 3 | 2 | -0.5 pp | -2.5 pp to +1.5 pp | 1.0000 |
 | `baseline` | `decompose` | 58 | 13 | -22.5 pp | -30.0 pp to -15.0 pp | < 0.0001 |
 
-**The "better" prompt is worse.** Asking the model to write out millions, thousands and
-the remainder before answering cost 22.5 points. The two prompts disagreed on 71 items
+Asking the model to write out millions, thousands and the remainder before answering
+cost 22.5 points. The interval excludes zero by a wide margin, and the A/A pair shows
+what no effect looks like on the same scale.
+
+### The test is decided by the items where the arms disagree
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/paired-outcomes-dark.png">
+  <img src="docs/figures/paired-outcomes-light.png" alt="Items split by which arm answered correctly: baseline and baseline-repeat disagree on 5 of 200 items, baseline and decompose on 71" width="720">
+</picture>
+
+The two runs of the same prompt disagreed on 5 of 200 items, 3 one way and 2 the other,
+at temperature 0 (187 of the 200 replies were identical word for word). That is the
+noise floor: a gap of a point or two between two prompts on this setup would be
+indistinguishable from running one prompt twice. The two prompts disagreed on 71 items,
 and the baseline won 58 of them.
 
-**The noise floor is small but not zero.** At temperature 0 the same prompt still gave
-a different outcome on 5 of 200 items. A gap of a point or two between two prompts on
-this setup would be indistinguishable from running one prompt twice; a gap of 22 is not.
+### Why it is worse
 
-**Part of the loss is truncation, most of it is not.** The model is a reasoning model,
-and with the longer prompt 18 replies hit the 2048-token limit before reaching the
-answer line (1 for the baseline). Those count as wrong, as the scoring rule fixed in
-advance says. As a check made after seeing the data, not a planned test: leaving out
-the 19 items where either arm was truncated, `decompose` is still 18.8 points behind
-(47 items only the baseline got right, 13 only `decompose`; bootstrap interval -26.5 pp
-to -11.0 pp). The report prints this check next to the planned comparisons.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/errors-dark.png">
+  <img src="docs/figures/errors-light.png" alt="Wrong answers by kind and arm: misread 40, 40 and 45; added group counts 0, 0 and 23; cut off at the token limit 1, 2 and 18" width="720">
+</picture>
 
-**Where it loses, descriptively.** The drop is larger on thousands (86% to 54%) than on
-millions (73% to 60%), and larger in the accusative (82% to 53%) than in the nominative
-(77% to 61%). These slices were not planned as tests.
+Reading the wrong replies, after the test, explains nearly the whole gap. The
+decomposition prompt did not make the model read numbers worse: it misread about as
+many as the baseline, 45 against 40. It added two ways to fail that the baseline does
+not have.
+
+- **23 replies added the group counts instead of the place values.** For 257 121 the
+  model wrote `TUKSTANCIUS: 257`, `LIKUTIS: 121`, `ATSAKYMAS: 378`. It read every group
+  correctly and then did what the prompt literally says: write the thousands in
+  digits, then add. The instruction was ambiguous, and the model resolved it the wrong
+  way about one time in nine.
+- **18 replies were cut off at the 2048-token limit.** The model reasons before it
+  answers, and the longer prompt roughly tripled that reasoning (a median of 713
+  reasoning tokens against 246), so some replies ran out before the answer line.
+  Leaving out the 19 items where either arm was truncated, `decompose` is still 18.8
+  points behind (bootstrap interval -26.5 pp to -11.0 pp).
+
+So the finding is narrower than "decomposition hurts": this wording of it, on this
+model, at this token limit, introduced two new failure modes that cost more than the
+instruction was meant to save. The error kinds were defined after seeing the replies
+and are a description, not a test.
+
+### Where it loses
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/slices-dark.png">
+  <img src="docs/figures/slices-light.png" alt="Accuracy of baseline and decompose by slice: thousands 86% to 54%, millions 73% to 60%, nominative 77% to 61%, accusative 82% to 53%" width="720">
+</picture>
+
+The drop is larger on thousands than on millions, and larger in the accusative than in
+the nominative. These slices were not planned as tests.
 
 ## Running it
 
@@ -162,7 +212,7 @@ uv run python -m llm_ab.runner
 ```
 
 ```bash
-uv run python -m llm_ab.report --out docs/results.md --plot docs/results.png
+uv run python -m llm_ab.report --out docs/results.md --plots docs/figures
 ```
 
 The runner sends each item to every arm in turn, logs its progress, and waits out rate
@@ -181,6 +231,10 @@ uv run python -m llm_ab.items --n 200 --seed 0
 - One task, one language, generated items. The method transfers; the numbers do not.
 - Right-or-wrong outcomes only. Graded scores from an LLM judge need different tests
   (a paired bootstrap still works; McNemar does not).
+- One wording per variant. The decomposition instruction turned out to be ambiguous
+  (see "Why it is worse"), and it was tried on only five items before the run. A
+  clearer wording might help; this experiment cannot say, and rewording it now and
+  rerunning on the same 200 items would be tuning on the test set.
 - One model, one run per arm. The result says that this decomposition prompt hurts
   `openai/gpt-oss-20b` at this token limit; a five-item pilot on another model pointed
   the other way, and nothing here says which holds there.

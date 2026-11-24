@@ -6,7 +6,9 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from llm_ab.errors import ERROR_KINDS, ErrorKind, classify
 from llm_ab.experiment import ARMS, COMPARISONS, Comparison
 from llm_ab.items import Item, load_items
 from llm_ab.records import read_records, run_path
@@ -20,6 +22,9 @@ from llm_ab.stats import (
     paired_counts,
     wilson_interval,
 )
+
+if TYPE_CHECKING:
+    from llm_ab.plots import ReportData
 
 Scores = dict[str, Score]
 
@@ -191,14 +196,10 @@ def _slice_table(comparison: Comparison, items: Sequence[Item], a: Scores, b: Sc
         f"| Slice | Items | `{comparison.a}` | `{comparison.b}` | Difference |",
         "|---|---:|---:|---:|---:|",
     ]
-    for label, belongs in _SLICES:
-        right_a, right_b = _paired(a, b, {item.id for item in items if belongs(item)})
-        if not right_a:
-            continue
-        counts = paired_counts(right_a, right_b)
+    for label, n, accuracy_a, accuracy_b in _slice_accuracy(items, a, b):
         lines.append(
-            f"| {label} | {counts.n} | {_pct(sum(right_a) / counts.n)} | "
-            f"{_pct(sum(right_b) / counts.n)} | {_pp(counts.difference)} |"
+            f"| {label} | {n} | {_pct(accuracy_a)} | {_pct(accuracy_b)} | "
+            f"{_pp(accuracy_b - accuracy_a)} |"
         )
     return lines
 
@@ -236,6 +237,47 @@ def _truncation_table(
     ]
 
 
+def error_counts(items: Sequence[Item], arm: ArmReplies) -> Counter[ErrorKind]:
+    """An arm's wrong answers by kind."""
+    kinds = (
+        classify(item.answer, arm.scores[item.id], item.id in arm.truncated)
+        for item in items
+        if item.id in arm.scores
+    )
+    return Counter(kind for kind in kinds if kind is not None)
+
+
+def _error_table(items: Sequence[Item], arms: dict[str, ArmReplies]) -> list[str]:
+    counts = {name: error_counts(items, arm) for name, arm in arms.items()}
+    lines = [
+        "## Kinds of wrong answer",
+        "",
+        "A description made after reading the replies, not a test. A reply cut off at the",
+        "token limit is counted as that, whatever else is wrong with it.",
+        "",
+        "| Kind | " + " | ".join(f"`{name}`" for name in arms) + " |",
+        "|---|" + "---:|" * len(arms),
+    ]
+    for kind, label in ERROR_KINDS.items():
+        if any(c[kind] for c in counts.values()):
+            lines.append(f"| {label} | " + " | ".join(str(c[kind]) for c in counts.values()) + " |")
+    lines.append("| all wrong | " + " | ".join(str(c.total()) for c in counts.values()) + " |")
+    return lines
+
+
+def _slice_accuracy(
+    items: Sequence[Item], a: Scores, b: Scores
+) -> list[tuple[str, int, float, float]]:
+    """Label, items, accuracy of A and accuracy of B for every slice that has items."""
+    rows: list[tuple[str, int, float, float]] = []
+    for label, belongs in _SLICES:
+        right_a, right_b = _paired(a, b, {item.id for item in items if belongs(item)})
+        if right_a:
+            n = len(right_a)
+            rows.append((label, n, sum(right_a) / n, sum(right_b) / n))
+    return rows
+
+
 def render(items: Sequence[Item], arms: dict[str, ArmReplies]) -> str:
     answered = {name: arm for name, arm in arms.items() if arm.scores}
     if not answered:
@@ -252,41 +294,40 @@ def render(items: Sequence[Item], arms: dict[str, ArmReplies]) -> str:
             for r in results
         ),
         _truncation_table(results, answered),
+        _error_table(items, answered),
     ]
     return "\n\n".join("\n".join(section) for section in sections if section) + "\n"
 
 
-def plot(all_scores: dict[str, Scores], path: Path) -> None:
-    """Draw each comparison's difference with its interval against the zero line."""
-    import matplotlib
+def report_data(items: Sequence[Item], arms: dict[str, ArmReplies]) -> ReportData:
+    """The numbers behind the figures, computed the same way as the tables."""
+    from llm_ab.plots import ArmAccuracy, Difference, ReportData, SliceAccuracy
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
+    answered = {name: arm for name, arm in arms.items() if arm.scores}
+    all_scores = {name: arm.scores for name, arm in answered.items()}
     results = compare(all_scores)
-    if not results:
-        return
-    fig, ax = plt.subplots(figsize=(7, 1.2 + 0.7 * len(results)))
-    for row, r in enumerate(results):
-        diff = 100 * r.counts.difference
-        ax.errorbar(
-            diff,
-            row,
-            xerr=[[diff - 100 * r.interval.low], [100 * r.interval.high - diff]],
-            fmt="o",
-            color="#1f4e79",
-            capsize=4,
-        )
-    ax.axvline(0, color="#888888", linewidth=1, linestyle="--")
-    ax.set_yticks(range(len(results)))
-    ax.set_yticklabels([f"{r.comparison.b}\nvs {r.comparison.a}" for r in results])
-    ax.set_ylim(-0.6, len(results) - 0.4)
-    ax.invert_yaxis()
-    ax.set_xlabel("Difference in accuracy, percentage points (95% bootstrap interval)")
-    fig.tight_layout()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
+    summaries = [summarise_arm(name, arm) for name, arm in answered.items()]
+    # The slices are worth drawing for a comparison of two prompts, not for the A/A pair.
+    contrast = next(
+        (
+            r.comparison
+            for r in results
+            if ARMS[r.comparison.a].prompt != ARMS[r.comparison.b].prompt
+        ),
+        None,
+    )
+    slices = (
+        _slice_accuracy(items, all_scores[contrast.a], all_scores[contrast.b]) if contrast else []
+    )
+    return ReportData(
+        arms=[ArmAccuracy(s.name, s.accuracy, s.interval) for s in summaries],
+        differences=[
+            Difference(r.comparison.a, r.comparison.b, r.counts, r.interval) for r in results
+        ],
+        slices=[SliceAccuracy(label, a, b) for label, _, a, b in slices],
+        slice_arms=(contrast.a, contrast.b) if contrast else None,
+        errors={name: error_counts(items, arm) for name, arm in answered.items()},
+    )
 
 
 def main() -> None:
@@ -296,7 +337,7 @@ def main() -> None:
     parser.add_argument("--items", type=Path, default=Path("data/items.jsonl"))
     parser.add_argument("--runs", type=Path, default=Path("runs"))
     parser.add_argument("--out", type=Path, help="write the report here instead of printing it")
-    parser.add_argument("--plot", type=Path, help="write a plot of the comparisons here")
+    parser.add_argument("--plots", type=Path, help="write the figures into this directory")
     args = parser.parse_args()
 
     items = load_items(args.items)
@@ -307,8 +348,10 @@ def main() -> None:
         args.out.write_text(text, encoding="utf-8")
     else:
         print(text, end="")
-    if args.plot:
-        plot({name: arm.scores for name, arm in arms.items()}, args.plot)
+    if args.plots:
+        from llm_ab.plots import save_all
+
+        save_all(report_data(items, arms), args.plots)
 
 
 if __name__ == "__main__":
