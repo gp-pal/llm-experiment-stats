@@ -252,3 +252,9 @@ uv run python -m llm_ab.items --n 200 --seed 0
 fast-food marketing campaign and on the Cookie Cats mobile game, with sample-ratio
 checks, bootstrap and analytical intervals, ANOVA and Tukey's test. The statistics are
 the same; the experimental unit changed from a customer to an eval item.
+
+## License
+
+The code, the generated eval set and the recorded replies are under the
+[MIT License](LICENSE). The two CSV files in [`classic/datasets/`](classic/datasets/)
+are third-party datasets and are not covered by it.
